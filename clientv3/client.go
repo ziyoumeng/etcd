@@ -84,7 +84,7 @@ type Client struct {
 	resolverGroup *endpoint.ResolverGroup
 	mu            *sync.RWMutex
 
-	ctx    context.Context
+	ctx    context.Context //基于传入的ctx的子cancelCtx
 	cancel context.CancelFunc
 
 	// Username is a user name for authentication.

@@ -25,19 +25,20 @@ const defaultSessionTTL = 60
 
 // Session represents a lease kept alive for the lifetime of a client.
 // Fault-tolerant applications may use sessions to reason about liveness.
-// Session为传入的client维持了一个不断刷新的lease,以监听etcd client连接的可用性，并对外暴露了Done()方法，当不可用时作为通知
+// Session为传入的client维持了一个不断刷新的lease,以判断etcd service的是否存活(or client是否正常,收到通知说明业务需要重连了);并对外暴露了Done()方法做为通知
+// 注意：Session并未对client.ctx做任何操作,而是基于其创建了个子cancelCtx;
 type Session struct {
 	client *v3.Client
 	opts   *sessionOptions
 	id     v3.LeaseID
 
 	cancel context.CancelFunc
-	donec  <-chan struct{} //存在的作用：对我暴露一个Chan以监听Session的关闭信号
+	donec  <-chan struct{} //存在的作用：对外暴露一个Chan以监听Session的关闭信号
 }
 
 // NewSession gets the leased session for a client.
 func NewSession(client *v3.Client, opts ...SessionOption) (*Session, error) {
-	ops := &sessionOptions{ttl: defaultSessionTTL, ctx: client.Ctx()}
+	ops := &sessionOptions{ttl: defaultSessionTTL, ctx: client.Ctx()} //注意 session的opts里持有的是client的ctx
 	for _, opt := range opts {
 		opt(ops)
 	}
@@ -51,7 +52,7 @@ func NewSession(client *v3.Client, opts ...SessionOption) (*Session, error) {
 		id = resp.ID
 	}
 	//lease.KeepAlive的经典用法
-	ctx, cancel := context.WithCancel(ops.ctx)
+	ctx, cancel := context.WithCancel(ops.ctx) //基于client的ctx，new了个子cancelCtx
 	keepAlive, err := client.KeepAlive(ctx, id)
 	if err != nil || keepAlive == nil {
 		cancel() //释放ctx资源
@@ -59,7 +60,7 @@ func NewSession(client *v3.Client, opts ...SessionOption) (*Session, error) {
 	}
 
 	donec := make(chan struct{})
-	s := &Session{client: client, opts: ops, id: id, cancel: cancel, donec: donec}
+	s := &Session{client: client, opts: ops, id: id, cancel: cancel, donec: donec} //注意 cancel是子cancelCtx的
 
 	// keep the lease alive until client error or cancelled context
 	go func() {
