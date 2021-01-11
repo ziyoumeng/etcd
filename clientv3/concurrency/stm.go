@@ -25,7 +25,7 @@ import (
 type STM interface {
 	// Get returns the value for a key and inserts the key in the txn's read set.
 	// If Get fails, it aborts the transaction with an error, never returning.
-	Get(key ...string) string
+	Get(key ...string) string //疑惑：为啥要 ...
 	// Put adds a value for a key to the write set.
 	Put(key, val string, opts ...v3.OpOption)
 	// Rev returns the revision of a key in the read set.
@@ -81,6 +81,7 @@ func WithAbortContext(ctx context.Context) stmOption {
 // If an STM transaction will unconditionally fetch a set of keys, prefetching
 // those keys will save the round-trip cost from requesting each key one by one
 // with Get().
+// 预先批量get，避免单个get的网络开销
 func WithPrefetch(keys ...string) stmOption {
 	return func(so *stmOptions) { so.prefetch = append(so.prefetch, keys...) }
 }
@@ -94,7 +95,7 @@ func NewSTM(c *v3.Client, apply func(STM) error, so ...stmOption) (*v3.TxnRespon
 	if len(opts.prefetch) != 0 {
 		f := apply
 		apply = func(s STM) error {
-			s.Get(opts.prefetch...)
+			s.Get(opts.prefetch...) //先批量Get，写入读缓存，降低单个get的网络开销
 			return f(s)
 		}
 	}
@@ -139,7 +140,7 @@ type stmResponse struct {
 
 func runSTM(s STM, apply func(STM) error) (*v3.TxnResponse, error) {
 	outc := make(chan stmResponse, 1)
-	go func() {
+	go func() {//因为会panic所以用go
 		defer func() {
 			if r := recover(); r != nil {
 				e, ok := r.(stmError)
@@ -151,7 +152,7 @@ func runSTM(s STM, apply func(STM) error) (*v3.TxnResponse, error) {
 			}
 		}()
 		var out stmResponse
-		for {
+		for { //乐观锁，只有没有错误或panic就不断重试
 			s.reset()
 			if out.err = apply(s); out.err != nil {
 				break
@@ -243,12 +244,13 @@ func (ws writeSet) puts() []v3.Op {
 }
 
 func (s *stm) Get(keys ...string) string {
-	if wv := s.wset.get(keys...); wv != nil {
+	if wv := s.wset.get(keys...); wv != nil { //先从写缓存拿
 		return wv.val
 	}
 	return respToValue(s.fetch(keys...))
 }
 
+//先放入写缓存
 func (s *stm) Put(key, val string, opts ...v3.OpOption) {
 	s.wset[key] = stmPut{val, v3.OpPut(key, val, opts...)}
 }
@@ -279,16 +281,17 @@ func (s *stm) fetch(keys ...string) *v3.GetResponse {
 	}
 	ops := make([]v3.Op, len(keys))
 	for i, key := range keys {
-		if resp, ok := s.rset[key]; ok {
+		if resp, ok := s.rset[key]; ok {//先从读缓存拿
 			return resp
 		}
 		ops[i] = v3.OpGet(key, s.getOpts...)
 	}
+	//读缓存没有，再去服务取
 	txnresp, err := s.client.Txn(s.ctx).Then(ops...).Commit()
 	if err != nil {
 		panic(stmError{err})
 	}
-	s.rset.add(keys, txnresp)
+	s.rset.add(keys, txnresp) //加入读缓存
 	return (*v3.GetResponse)(txnresp.Responses[0].GetResponseRange())
 }
 
@@ -308,20 +311,19 @@ func (s *stmSerializable) Get(keys ...string) string {
 	if wv := s.wset.get(keys...); wv != nil {
 		return wv.val
 	}
-	firstRead := len(s.rset) == 0
-	for _, key := range keys {
+	firstRead := len(s.rset) == 0 //是否首次调用Get
+	for _, key := range keys {//将预读的数据写入读缓存
 		if resp, ok := s.prefetch[key]; ok {
 			delete(s.prefetch, key)
 			s.rset[key] = resp
 		}
 	}
-	resp := s.stm.fetch(keys...)
+	resp := s.stm.fetch(keys...)//注意是stm.fetch 先读的读缓存
 	if firstRead {
 		// txn's base revision is defined by the first read
 		s.getOpts = []v3.OpOption{
 			v3.WithRev(resp.Header.Revision), //系统当前最新版本
 			v3.WithSerializable(), //默认不加这个参数时是线性 linearizable 一致性的读取策略,会通过raft确认是不是最新
-
 		}
 	}
 	return respToValue(resp)

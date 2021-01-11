@@ -25,18 +25,20 @@ const defaultSessionTTL = 60
 
 // Session represents a lease kept alive for the lifetime of a client.
 // Fault-tolerant applications may use sessions to reason about liveness.
+// Session为传入的client维持了一个不断刷新的lease,以判断etcd service的是否存活(or client是否正常,收到通知说明业务需要重连了);并对外暴露了Done()方法做为通知
+// 注意：Session并未对client.ctx做任何操作,而是基于其创建了个子cancelCtx;
 type Session struct {
 	client *v3.Client
 	opts   *sessionOptions
 	id     v3.LeaseID
 
 	cancel context.CancelFunc
-	donec  <-chan struct{}
+	donec  <-chan struct{} //存在的作用：对外暴露一个Chan以监听Session的关闭信号
 }
 
 // NewSession gets the leased session for a client.
 func NewSession(client *v3.Client, opts ...SessionOption) (*Session, error) {
-	ops := &sessionOptions{ttl: defaultSessionTTL, ctx: client.Ctx()}
+	ops := &sessionOptions{ttl: defaultSessionTTL, ctx: client.Ctx()} //注意 session的opts里持有的是client的ctx
 	for _, opt := range opts {
 		opt(ops)
 	}
@@ -49,21 +51,21 @@ func NewSession(client *v3.Client, opts ...SessionOption) (*Session, error) {
 		}
 		id = resp.ID
 	}
-
-	ctx, cancel := context.WithCancel(ops.ctx)
+	//lease.KeepAlive的经典用法
+	ctx, cancel := context.WithCancel(ops.ctx) //基于client的ctx，new了个子cancelCtx
 	keepAlive, err := client.KeepAlive(ctx, id)
 	if err != nil || keepAlive == nil {
-		cancel()
+		cancel() //释放ctx资源
 		return nil, err
 	}
 
 	donec := make(chan struct{})
-	s := &Session{client: client, opts: ops, id: id, cancel: cancel, donec: donec}
+	s := &Session{client: client, opts: ops, id: id, cancel: cancel, donec: donec} //注意 cancel是子cancelCtx的
 
 	// keep the lease alive until client error or cancelled context
 	go func() {
-		defer close(donec)
-		for range keepAlive {
+		defer close(donec) // etcd客户端后，做一些业务的善后工作
+		for range keepAlive { // 通过keepAlive ch感知etcd客户端何时关闭
 			// eat messages until keep alive channel closes
 		}
 	}()
@@ -79,15 +81,15 @@ func (s *Session) Client() *v3.Client {
 // Lease is the lease ID for keys bound to the session.
 func (s *Session) Lease() v3.LeaseID { return s.id }
 
-// Done returns a channel that closes when the lease is orphaned, expires, or
+// Done returns a channel that closes when the lease is orphaned(孤儿), expires, or
 // is otherwise no longer being refreshed.
 func (s *Session) Done() <-chan struct{} { return s.donec }
 
 // Orphan ends the refresh for the session lease. This is useful
-// in case the state of the client connection is indeterminate (revoke
+// in case the state of the client connection is indeterminate（不确定的） (revoke
 // would fail) or when transferring lease ownership.
 func (s *Session) Orphan() {
-	s.cancel()
+	s.cancel()//停止刷新 session lease后，keepAlive会被关闭，NewSession中的读携程在结束时会close(s.donec)
 	<-s.donec
 }
 

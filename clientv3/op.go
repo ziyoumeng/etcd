@@ -334,7 +334,7 @@ func WithLease(leaseID LeaseID) OpOption {
 // If WithLimit is given a 0 limit, it is treated as no limit.
 func WithLimit(n int64) OpOption { return func(op *Op) { op.limit = n } }
 
-// WithRev specifies the store revision for 'Get' request.
+// WithRev specifies the store revision for 'Get' request. //疑惑： store revision 应该是etcd全部数据在该版本时的一个快照，对于一个特定的key是取低于该版本的最新版本
 // Or the start revision of 'Watch' request.
 func WithRev(rev int64) OpOption { return func(op *Op) { op.rev = rev } }
 
