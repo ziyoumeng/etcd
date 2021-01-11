@@ -67,6 +67,7 @@ type KeyValue struct {
 	// version is the version of the key. A deletion resets
 	// the version to zero and any modification of the key
 	// increases its version.
+	//key的递增版本 0开始
 	Version int64 `protobuf:"varint,4,opt,name=version,proto3" json:"version,omitempty"`
 	// value is the value held by the key, in bytes.
 	Value []byte `protobuf:"bytes,5,opt,name=value,proto3" json:"value,omitempty"`

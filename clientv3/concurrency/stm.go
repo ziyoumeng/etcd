@@ -296,7 +296,9 @@ func (s *stm) reset() {
 	s.rset = make(map[string]*v3.GetResponse)
 	s.wset = make(map[string]stmPut)
 }
-
+//Serializable使用的是stmSerializable类，它与上面两个使用的stm一个主要不同点在于，它第一次读完了会把当时的版本号给记录下来，
+//下次再向 etcd 发出读请求的时候会带上这个版本号，表示我就要当时那个版本的数据，这确保了该事务所有的读操作读到的都是同一时刻的内容。
+//这就相当于在事务开始时，对 etcd 做了一个快照，这样它读取到的数据就不会受到其他事务的影响，从而达到事务串行化（Serializable）执行的效果。
 type stmSerializable struct {
 	stm
 	prefetch map[string]*v3.GetResponse
@@ -317,8 +319,9 @@ func (s *stmSerializable) Get(keys ...string) string {
 	if firstRead {
 		// txn's base revision is defined by the first read
 		s.getOpts = []v3.OpOption{
-			v3.WithRev(resp.Header.Revision),
-			v3.WithSerializable(),
+			v3.WithRev(resp.Header.Revision), //系统当前最新版本
+			v3.WithSerializable(), //默认不加这个参数时是线性 linearizable 一致性的读取策略,会通过raft确认是不是最新
+
 		}
 	}
 	return respToValue(resp)

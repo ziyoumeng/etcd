@@ -105,25 +105,27 @@ func (e ErrKeepAliveHalted) Error() string {
 	return s
 }
 
+// 租期
 type Lease interface {
-	// Grant creates a new lease.
+	// Grant creates a new lease. 创建
 	Grant(ctx context.Context, ttl int64) (*LeaseGrantResponse, error)
 
-	// Revoke revokes the given lease.
+	// Revoke(废除) revokes the given lease. 删除
 	Revoke(ctx context.Context, id LeaseID) (*LeaseRevokeResponse, error)
 
-	// TimeToLive retrieves the lease information of the given lease ID.
+	// TimeToLive retrieves the lease information of the given lease ID. 获取单个
 	TimeToLive(ctx context.Context, id LeaseID, opts ...LeaseOption) (*LeaseTimeToLiveResponse, error)
 
-	// Leases retrieves all leases.
+	// Leases retrieves all leases. 获取全部
 	Leases(ctx context.Context) (*LeaseLeasesResponse, error)
 
+	//保持leaseid 存活,持续刷新租期
 	// KeepAlive attempts to keep the given lease alive forever. If the keepalive responses posted
 	// to the channel are not consumed promptly the channel may become full. When full, the lease
 	// client will continue sending keep alive requests to the etcd server, but will drop responses
 	// until there is capacity on the channel to send more responses.
 	//
-	// If client keep alive loop halts with an unexpected error (e.g. "etcdserver: no leader") or
+	// If client keep alive loop halts(停止) with an unexpected error (e.g. "etcdserver: no leader") or
 	// canceled by the caller (e.g. context.Canceled), KeepAlive returns a ErrKeepAliveHalted error
 	// containing the error reason.
 	//
